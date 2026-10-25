@@ -73,9 +73,9 @@ curl localhost:8000/metrics     # p50/p95/p99 latency, mean batch size
 
 ## Run it on a free NVIDIA GPU (Google Colab)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_GITHUB_USERNAME/gpuforge/blob/main/notebooks/gpuforge_colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Himja18/gpuforge/blob/main/notebooks/gpuforge_colab.ipynb)
 
-Replace `YOUR_GITHUB_USERNAME` in the badge link after pushing the repo. Or open
+Replace `Himja18` in the badge link after pushing the repo. Or open
 [colab.research.google.com](https://colab.research.google.com), choose *File → Upload notebook* and pick
 `notebooks/gpuforge_colab.ipynb`.
 
