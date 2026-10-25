@@ -42,7 +42,7 @@ def _load_extension():
             _EXT = load(
                 name="gpuforge_kernels",
                 sources=[str(src / "binding.cpp"), str(src / "kernels.cu")],
-                extra_cuda_cflags=["-O3", "--use_fast_math", "-lineinfo"],
+                extra_cuda_cflags=["-O3", "-lineinfo"],
                 verbose=False,
             )
     if _EXT is None:

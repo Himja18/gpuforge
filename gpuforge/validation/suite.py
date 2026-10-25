@@ -69,12 +69,17 @@ def validate_gemm(device: str, rng: np.random.Generator) -> list[nm.CheckResult]
             bias = torch.from_numpy(bias64).to(dtype)
             aq, bq, biasq = (t.double().numpy() for t in (a, b, bias))
             u = _accum_roundoff(dtype, device)
-            # linear part checked against the inner-product bound; activations are
-            # 1-Lipschitz (relu) / ~1.13-Lipschitz (gelu), so bound scales accordingly
+            pre = aq @ bq + biasq  # exact pre-activation
+            # error of the linear part: inner-product bound + bias add + rounding of the sum
+            lin_bound = nm.gemm_error_bound(aq, bq, u) + 2 * u * np.abs(biasq) + u * np.abs(pre)
             for act in ("none", "relu", "gelu"):
                 ref = nm.ref_gemm_bias_act(aq, bq, biasq, act)
+                # relu is 1-Lipschitz, gelu ~1.13-Lipschitz, so input error is amplified by at
+                # most that much; gelu also adds its own evaluation error (see numerics.py)
                 lip = 1.13 if act == "gelu" else 1.0
-                bound = lip * (nm.gemm_error_bound(aq, bq, u) + u * np.abs(ref)) + 2 * u * np.abs(biasq)
+                bound = lip * lin_bound + u * np.abs(ref)
+                if act == "gelu":
+                    bound = bound + nm.gelu_eval_error_bound(pre, u)
                 for name, fn in impls.items():
                     if name.startswith("gpuforge") and dtype != torch.float32:
                         continue

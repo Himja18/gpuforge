@@ -63,3 +63,25 @@ def test_full_suite_passes_on_this_device():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     results = suite.run(device)
     assert results and all(r.passed for r in results), [r for r in results if not r.passed]
+
+
+def _gelu_f32(x: np.ndarray, tanh_rel_err: float = 0.0) -> np.ndarray:
+    """GELU evaluated step by step in float32, like the CUDA epilogue does."""
+    x = x.astype(np.float32)
+    k0, k1, half, one = np.float32(0.7978845608028654), np.float32(0.044715), np.float32(0.5), np.float32(1)
+    inner = k0 * (x + k1 * x * x * x)
+    t = np.tanh(inner).astype(np.float32)
+    if tanh_rel_err:
+        t = (t * np.float32(1 + tanh_rel_err)).astype(np.float32)  # model a hardware tanh approximation
+    return half * x * (one + t)
+
+
+def test_gelu_bound_accepts_precise_tanh_and_rejects_fast_math_tanh():
+    x = np.linspace(-6, 6, 20001)
+    ref = 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x ** 3)))
+    u = nm.UNIT_ROUNDOFF[torch.float32]
+    bound = nm.gelu_eval_error_bound(x, u) + u * np.abs(ref)
+    precise = nm.check_against_bound("gelu", "fp32", torch.from_numpy(_gelu_f32(x)), ref, bound, "1d")
+    assert precise.passed, precise.bound_ratio
+    fast = nm.check_against_bound("gelu", "fast_math", torch.from_numpy(_gelu_f32(x, 2.0 ** -11)), ref, bound, "1d")
+    assert not fast.passed and fast.bound_ratio > 50

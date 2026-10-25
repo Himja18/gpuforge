@@ -51,6 +51,19 @@ def gemm_error_bound(a: np.ndarray, b: np.ndarray, u: float, safety: float = 1.0
     return safety * gamma(k + 2, u) * (np.abs(a) @ np.abs(b))
 
 
+# GELU(x) = 0.5 x (1 + tanh(k0 (x + k1 x^3))) takes ~8 rounded operations plus a
+# tanh accurate to ~2 ulp (CUDA's precise tanhf). Every intermediate is bounded by a
+# small multiple of |x|, so the evaluation error is a few ulps *of |x|*, not of the
+# (possibly tiny) output. A hardware tanh approximation (tanh.approx.f32, which
+# --use_fast_math selects on sm_75+) has ~2^-11 relative error, about 2000x more
+# than this budget, and is rejected - which is how the suite caught it on a T4.
+GELU_EVAL_ULPS = 10
+
+
+def gelu_eval_error_bound(x: np.ndarray, u: float) -> np.ndarray:
+    return GELU_EVAL_ULPS * u * np.abs(x)
+
+
 def ulp_distance_f32(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Distance in units-in-the-last-place between two float32 arrays."""
     def ordered(v: np.ndarray) -> np.ndarray:
