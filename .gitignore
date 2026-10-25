@@ -1,14 +1,15 @@
 __pycache__/
 *.egg-info/
-build/
 *.so
-runs/
-artifacts/
-reports/
-data/
-logs/
-*.plan
-*.onnx
 .pytest_cache/
 .ruff_cache/
-dist/
+*.plan
+*.onnx
+# run outputs (anchored to the repo root so package folders like gpuforge/data/ are not ignored)
+/build/
+/runs/
+/artifacts/
+/reports/
+/data/
+/logs/
+/dist/
