@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = ["onnxruntime-gpu>=1.18", "tensorrt>=10.0"]
+gpu = ["onnxruntime-gpu>=1.18", "tensorrt>=10.0", "onnxconverter-common>=1.14"]
 dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.4"]
 
 [tool.setuptools.packages.find]

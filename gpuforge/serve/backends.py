@@ -90,13 +90,15 @@ class TensorRTBackend(Backend):
         self.output = next(n for n in names if self.engine.get_tensor_mode(n) == trt.TensorIOMode.OUTPUT)
         is_half = self.engine.get_tensor_dtype(self.input) == trt.DataType.HALF
         self.in_dtype = torch.float16 if is_half else torch.float32
+        out_half = self.engine.get_tensor_dtype(self.output) == trt.DataType.HALF
+        self.out_dtype = torch.float16 if out_half else torch.float32
 
     @torch.inference_mode()
     def predict(self, x: np.ndarray) -> np.ndarray:
         inp = torch.from_numpy(x).to("cuda", dtype=self.in_dtype).contiguous()
         self.ctx.set_input_shape(self.input, tuple(inp.shape))
         out_shape = tuple(self.ctx.get_tensor_shape(self.output))
-        out = torch.empty(out_shape, device="cuda", dtype=torch.float32)
+        out = torch.empty(out_shape, device="cuda", dtype=self.out_dtype)
         self.ctx.set_tensor_address(self.input, inp.data_ptr())
         self.ctx.set_tensor_address(self.output, out.data_ptr())
         with torch.cuda.stream(self.stream):
@@ -104,7 +106,7 @@ class TensorRTBackend(Backend):
             if not self.ctx.execute_async_v3(self.stream.cuda_stream):
                 raise RuntimeError("TensorRT execution failed")
         self.stream.synchronize()
-        return out.cpu().numpy()
+        return out.float().cpu().numpy()
 
 
 def build_backend(kind: str, artifact: str) -> Backend:

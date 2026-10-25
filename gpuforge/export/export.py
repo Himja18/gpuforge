@@ -56,9 +56,27 @@ def trtexec_command(onnx_path: Path, engine_path: Path, precision: str, max_batc
             f"--minShapes={shape(1)} --optShapes={shape(max(1, max_batch // 2))} --maxShapes={shape(max_batch)}")
 
 
+def to_fp16_onnx(onnx_path: str | Path) -> Path:
+    """fp16 copy of an ONNX model with fp32 inputs/outputs kept (casts inserted at the edges)."""
+    import onnx
+    from onnxconverter_common import float16
+
+    onnx_path = Path(onnx_path)
+    out = onnx_path.with_name(onnx_path.stem + "_fp16.onnx")
+    model16 = float16.convert_float_to_float16(onnx.load(str(onnx_path)), keep_io_types=True)
+    onnx.save(model16, str(out))
+    return out
+
+
 def build_trt_engine(onnx_path: str | Path, engine_path: str | Path, precision: str = "fp16",
                      max_batch: int = 64, size: int = 32, workspace_gb: int = 2) -> Path | None:
-    """Build a serialized TensorRT engine with a dynamic-batch optimisation profile."""
+    """Build a serialized TensorRT engine with a dynamic-batch optimisation profile.
+
+    Works with both TensorRT APIs:
+      * TensorRT <= 10 (weakly typed): precision is chosen with builder flags (FP16 / INT8).
+      * TensorRT 11+ (strongly typed only): the FP16/INT8 flags are gone and each layer
+        runs in the dtype the ONNX graph declares, so for fp16 we build from an fp16 ONNX.
+    """
     onnx_path, engine_path = Path(onnx_path), Path(engine_path)
     try:
         import tensorrt as trt
@@ -67,21 +85,37 @@ def build_trt_engine(onnx_path: str | Path, engine_path: str | Path, precision: 
               + trtexec_command(onnx_path, engine_path, precision, max_batch, size))
         return None
 
+    weakly_typed = hasattr(trt.BuilderFlag, "FP16")
+    if not weakly_typed:
+        if precision == "int8":
+            raise RuntimeError(f"TensorRT {trt.__version__} is strongly typed: INT8 needs an ONNX model with "
+                               "Q/DQ nodes (e.g. from TensorRT Model Optimizer). Use --precision fp16.")
+        if precision == "fp16":
+            onnx_path = to_fp16_onnx(onnx_path)
+    print(f"TensorRT {trt.__version__}: {'weakly' if weakly_typed else 'strongly'} typed build, "
+          f"precision={precision}, from {onnx_path.name}")
+
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
-    network = builder.create_network(0)  # explicit batch is the default in TensorRT 10
+    flags = 0
+    strongly = getattr(trt.NetworkDefinitionCreationFlag, "STRONGLY_TYPED", None)
+    if not weakly_typed and strongly is not None:
+        flags = 1 << int(strongly)
+    network = builder.create_network(flags)
     parser = trt.OnnxParser(network, logger)
     if not parser.parse(onnx_path.read_bytes()):
         errs = "\n".join(str(parser.get_error(i)) for i in range(parser.num_errors))
         raise RuntimeError(f"ONNX parse failed:\n{errs}")
 
     config = builder.create_builder_config()
-    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_gb << 30)
-    if precision in ("fp16", "int8"):
+    try:
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_gb << 30)
+    except AttributeError:
+        pass  # older/newer APIs size the workspace automatically
+    if weakly_typed and precision in ("fp16", "int8"):
         config.set_flag(trt.BuilderFlag.FP16)
-    if precision == "int8":
-        # Calibration-free INT8 would need Q/DQ nodes (e.g. from TensorRT Model Optimizer);
-        # without them TensorRT falls back to FP16 for layers it cannot quantise.
+    if weakly_typed and precision == "int8":
+        # Calibration-free INT8 needs Q/DQ nodes; without them TensorRT keeps those layers in FP16.
         config.set_flag(trt.BuilderFlag.INT8)
 
     profile = builder.create_optimization_profile()

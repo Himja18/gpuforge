@@ -111,7 +111,7 @@ if torch.cuda.is_available():
     os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}"
     cuda_major = torch.version.cuda.split(".")[0]
     run(f"{PY} -m pip uninstall -q -y onnxruntime", check=False)
-    run(f"{PY} -m pip install -q onnxruntime-gpu tensorrt-cu{cuda_major}")
+    run(f"{PY} -m pip install -q onnxruntime-gpu tensorrt-cu{cuda_major} onnxconverter-common")
     rc = run(f"{PY} setup.py build_ext --inplace > reports/build.log 2>&1", check=False)
     if rc != 0:
         run("tail -40 reports/build.log", check=False)
