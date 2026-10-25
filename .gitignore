@@ -11,3 +11,4 @@ logs/
 *.onnx
 .pytest_cache/
 .ruff_cache/
+dist/

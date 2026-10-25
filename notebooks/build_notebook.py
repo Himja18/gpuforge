@@ -1,6 +1,10 @@
-"""Generates notebooks/gpuforge_colab.ipynb. Edit the cells here, then run:
-    python notebooks/build_notebook.py
+"""Generates the Colab notebooks. Edit the cells here, then run:
+    python notebooks/build_notebook.py            # notebooks/gpuforge_colab.ipynb (clone or upload the repo)
+    python notebooks/build_notebook.py --embed    # dist/gpuforge_colab_standalone.ipynb (repo embedded inside)
 """
+import argparse
+import base64
+import subprocess
 from pathlib import Path
 
 import nbformat as nbf
@@ -57,12 +61,13 @@ elif not CPU_TEST:
 
     md("""## 2. Get the code
 
+* **Standalone notebook?** Nothing to do: the project is embedded in this notebook.
 * **Pushed it to GitHub?** Paste the repo URL into `REPO_URL` (e.g. `https://github.com/<you>/gpuforge.git`).
 * **Otherwise** leave it empty and you'll be asked to upload `gpuforge.zip`."""),
     code("""#@title Repository
 REPO_URL = ""  #@param {type:"string"}
 
-import pathlib, zipfile
+import base64, io, pathlib, zipfile
 
 WORK = pathlib.Path("/content") if pathlib.Path("/content").exists() else pathlib.Path.cwd()
 REPO = WORK / "gpuforge"
@@ -74,6 +79,10 @@ elif REPO_URL:
         run(f"git -C {REPO} pull --ff-only")
     else:
         run(f"git clone --depth 1 {REPO_URL} {REPO}")
+elif globals().get("EMBEDDED_REPO_ZIP"):
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode(EMBEDDED_REPO_ZIP))) as z:
+        z.extractall(WORK)
+    print("Unpacked the embedded project")
 elif not (REPO / "pyproject.toml").exists():
     from google.colab import files
 
@@ -259,6 +268,25 @@ except ImportError:
     print("Not running in Colab - download the file from the file browser.")"""),
 ]
 
+ap = argparse.ArgumentParser()
+ap.add_argument("--embed", action="store_true", help="embed the committed repo (git HEAD) in the notebook")
+args = ap.parse_args()
+root = Path(__file__).resolve().parent.parent
+out = Path(__file__).with_name("gpuforge_colab.ipynb")
+
+if args.embed:
+    # git archive = exactly the committed files, under a top-level gpuforge/ folder
+    blob = subprocess.run(["git", "-C", str(root), "archive", "--format=zip", "--prefix=gpuforge/", "HEAD"],
+                          check=True, capture_output=True).stdout
+    b64 = base64.b64encode(blob).decode()
+    embed = code(f"#@title Embedded project files (about {len(blob) // 1024} KB - no need to open this cell)\n"
+                 f'EMBEDDED_REPO_ZIP = "{b64}"')
+    embed.metadata["cellView"] = "form"
+    idx = next(i for i, c in enumerate(cells) if c.cell_type == "markdown" and c.source.startswith("## 2."))
+    cells.insert(idx, embed)
+    out = root / "dist" / "gpuforge_colab_standalone.ipynb"
+    out.parent.mkdir(exist_ok=True)
+
 nb = nbf.v4.new_notebook(cells=cells)
 nb.metadata = {
     "accelerator": "GPU",
@@ -266,6 +294,5 @@ nb.metadata = {
     "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
     "language_info": {"name": "python"},
 }
-out = Path(__file__).with_name("gpuforge_colab.ipynb")
 nbf.write(nb, out)
 print("wrote", out)
