@@ -51,12 +51,13 @@ flowchart LR
 
 ```bash
 pip install --no-build-isolation -e ".[dev]"   # compiles the CUDA extension if nvcc is present
-make test        # 40 tests (CUDA-kernel tests auto-skip without a GPU)
+make test        # 42 tests (CUDA-kernel tests auto-skip without a GPU)
 make validate    # numerical validation report -> reports/validation.json
 make train       # or: make train-ddp  (all local GPUs over NCCL)
 make export      # ONNX + TensorRT FP16 engine
 make bench       # kernel TFLOPS vs cuBLAS, inference latency/throughput per backend
 make report      # analytics summary + regression check
+python -m gpuforge.analytics.report results   # measured numbers as markdown tables -> reports/RESULTS.md
 make serve BACKEND=tensorrt ARTIFACT=artifacts/model_fp16.plan
 ```
 
@@ -69,6 +70,20 @@ print(requests.post("http://localhost:8000/v1/predict", json={"inputs": x, "top_
 EOF
 curl localhost:8000/metrics     # p50/p95/p99 latency, mean batch size
 ```
+
+## Run it on a free NVIDIA GPU (Google Colab)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_GITHUB_USERNAME/gpuforge/blob/main/notebooks/gpuforge_colab.ipynb)
+
+Replace `YOUR_GITHUB_USERNAME` in the badge link after pushing the repo. Or open
+[colab.research.google.com](https://colab.research.google.com), choose *File → Upload notebook* and pick
+`notebooks/gpuforge_colab.ipynb`.
+
+Then select *Runtime → Change runtime type → T4 GPU* and *Runtime → Run all*. In about 10–15 minutes the notebook:
+builds the CUDA kernels for that GPU and checks them, runs all tests, validates kernels/cuBLAS/cuDNN, trains with
+mixed precision, builds a TensorRT engine, benchmarks everything, load-tests the server's dynamic batching, profiles
+training, and downloads `RESULTS.md` with your measured tables. The notebook is generated from
+`notebooks/build_notebook.py`.
 
 ## Design notes (good interview material)
 
@@ -95,14 +110,15 @@ only against runs on the same device model.
 
 ## Verified so far (in a CPU-only sandbox)
 
-* 24 tests pass, 16 CUDA-only tests skip; `ruff` clean.
+* 26 tests pass, 16 CUDA-only tests skip; `ruff` clean.
+* The Colab notebook executes top to bottom (in its CPU test mode).
 * CUDA extension **compiles and links** for sm_80 and sm_90 with CUDA 13 and imports correctly; input guards work.
 * Validation suite: 26/26 CPU checks pass (fp32 BLAS / conv / softmax vs float64).
 * Training (single process and 2-process DDP over Gloo) runs and checkpoints; ONNX export parity
   max |Δ| ≈ 1e-7 with 100 % top-1 agreement; server, batcher and analytics gate exercised end-to-end.
 
 **Not yet measured:** anything that needs a GPU — kernel correctness on device, TFLOPS vs cuBLAS, TensorRT latency.
-Run `make test validate bench` on a GPU (a free Colab/Kaggle T4 works) and paste the tables below.
+Run the Colab notebook (above) and paste the tables from `RESULTS.md` below.
 
 ## Results (fill in after running on a GPU)
 

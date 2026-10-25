@@ -146,14 +146,17 @@ class AnalyticsStore:
             "SELECT step, value FROM metrics WHERE run_id=? AND name=? ORDER BY step", (run_id, name)))
 
     def detect_regressions(self, run_id: int, window: int = 5, threshold_pct: float = 5.0,
-                           z_threshold: float = 3.0) -> list[Regression]:
+                           z_threshold: float = 3.0, noise_floor_pct: float = 3.0) -> list[Regression]:
         """Compare each benchmark in ``run_id`` with the same (name, params, metric)
         in the previous ``window`` runs on the same device.
 
         A result regresses only if it is *both* worse than the baseline median by
         more than ``threshold_pct`` *and* outside the run-to-run noise (robust
         z-score using the median absolute deviation). The two conditions together
-        keep noisy GPU timings from producing false alarms.
+        keep noisy GPU timings from producing false alarms. With only a few
+        history points the MAD underestimates the real noise, so the noise scale
+        never drops below ``noise_floor_pct`` of the baseline (typical run-to-run
+        variation from GPU clock boost and thermal state).
         """
         device = self._conn.execute("SELECT device FROM runs WHERE id=?", (run_id,)).fetchone()[0]
         current = self._conn.execute(
@@ -169,7 +172,8 @@ class AnalyticsStore:
                 continue
             base = statistics.median(hist)
             mad = statistics.median([abs(h - base) for h in hist]) if len(hist) > 1 else 0.0
-            scale = 1.4826 * mad or abs(base) * 0.01 or 1e-12  # MAD -> sigma; 1% floor
+            # MAD -> sigma, floored at the expected run-to-run noise
+            scale = max(1.4826 * mad, abs(base) * noise_floor_pct / 100.0, 1e-12)
             signed = (value - base) if hib else (base - value)  # >0 means better
             change_pct = 100.0 * signed / abs(base) if base else 0.0
             z = signed / scale

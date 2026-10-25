@@ -31,6 +31,7 @@ filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
 
 [tool.ruff]
 line-length = 120
+extend-exclude = ["notebooks"]  # notebook cells favour readability over lint rules
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "UP", "I"]

@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from gpuforge import kernels
+from gpuforge.utils import native_bf16
 from gpuforge.validation import numerics as nm
 
 GEMM_SHAPES = [(1, 1, 1), (7, 13, 5), (64, 64, 64), (127, 255, 129), (256, 512, 1024), (33, 1000, 4096)]
@@ -52,7 +53,11 @@ def validate_gemm(device: str, rng: np.random.Generator) -> list[nm.CheckResult]
     if kernels.extension_available() and device == "cuda":
         for v in kernels.VARIANTS:
             impls[f"gpuforge.{v}"] = functools.partial(_custom_gemm, variant=v)
-    dtypes = [torch.float32] + ([torch.float16, torch.bfloat16] if device == "cuda" else [])
+    dtypes = [torch.float32]
+    if device == "cuda":
+        dtypes.append(torch.float16)
+        if native_bf16():  # skip emulated bf16 on T4-class GPUs
+            dtypes.append(torch.bfloat16)
 
     for (m, n, k) in GEMM_SHAPES:
         a64, b64, bias64 = _rng_tensor(rng, (m, k)), _rng_tensor(rng, (k, n)), _rng_tensor(rng, (n,))

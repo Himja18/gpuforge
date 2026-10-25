@@ -1,11 +1,21 @@
-"""Builds the optional CUDA extension when nvcc is available; otherwise installs pure Python."""
+"""Builds the optional CUDA extension when a CUDA toolkit is available; otherwise installs pure Python.
+
+Set GPUFORGE_SKIP_EXT=1 to install only the Python package (then build the
+extension separately with ``python setup.py build_ext --inplace``).
+"""
 import os
 import shutil
 
 from setuptools import setup
 
+
+def _have_cuda_toolkit() -> bool:
+    home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or "/usr/local/cuda"
+    return bool(shutil.which("nvcc")) or os.path.exists(os.path.join(home, "bin", "nvcc"))
+
+
 ext_modules, cmdclass = [], {}
-if shutil.which("nvcc") or os.environ.get("CUDA_HOME"):
+if os.environ.get("GPUFORGE_SKIP_EXT") != "1" and _have_cuda_toolkit():
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
     ext_modules = [CUDAExtension(

@@ -43,3 +43,28 @@ def test_metrics_roundtrip():
     s.log_metrics(rid, 1, {"train/loss": 2.3})
     s.log_metrics(rid, 2, {"train/loss": 2.1})
     assert s.metric_series(rid, "train/loss") == [(1, 2.3), (2, 2.1)]
+
+
+def test_results_markdown_only_reports_measured_numbers():
+    from gpuforge.analytics.report import results_markdown
+
+    s = AnalyticsStore(":memory:")
+    assert "No results recorded yet" in results_markdown(s)
+    rid = s.start_run("benchmark", {"suite": "kernels"}, device="Tesla T4")
+    s.log_benchmark(rid, "gemm.cublas", {"M": 1024, "N": 1024, "K": 1024, "dtype": "fp32"}, "tflops", 4.0, True)
+    s.log_benchmark(rid, "gemm.regtile", {"M": 1024, "N": 1024, "K": 1024, "dtype": "fp32"}, "tflops", 2.0, True)
+    md = results_markdown(s)
+    assert "Tesla T4" in md and "| regtile | 1024 |" in md and "50.0%" in md
+
+
+def test_amp_auto_resolution():
+    import pytest
+    import torch
+
+    from gpuforge.utils import resolve_amp_dtype
+
+    assert resolve_amp_dtype("none", "cuda") is None
+    assert resolve_amp_dtype("auto", "cpu") == torch.bfloat16
+    assert resolve_amp_dtype("auto", "cuda") in (torch.bfloat16, torch.float16)
+    with pytest.raises(ValueError):
+        resolve_amp_dtype("fp8", "cuda")

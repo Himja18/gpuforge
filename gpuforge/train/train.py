@@ -22,6 +22,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from gpuforge.data.pipeline import CUDAPrefetcher, GPUPreprocessor, build_dataset, build_loader
 from gpuforge.models.resnet import build_model
+from gpuforge.utils import resolve_amp_dtype
 
 
 @dataclass
@@ -34,7 +35,7 @@ class TrainConfig:
     lr: float = 0.1                # peak LR for batch 256; scaled linearly with world size
     weight_decay: float = 5e-4
     label_smoothing: float = 0.1
-    amp_dtype: str = "bf16"        # bf16 | fp16 | none
+    amp_dtype: str = "auto"        # auto | bf16 | fp16 | none (auto: bf16 on Ampere+, fp16 on T4/V100)
     channels_last: bool = True
     compile: bool = False
     workers: int = 4
@@ -88,9 +89,9 @@ def nvtx(name: str):
 
 
 def _amp(cfg: TrainConfig, device: torch.device):
-    if cfg.amp_dtype == "none":
+    dtype = resolve_amp_dtype(cfg.amp_dtype, device.type)
+    if dtype is None:
         return contextlib.nullcontext, None
-    dtype = torch.bfloat16 if cfg.amp_dtype == "bf16" else torch.float16
     scaler = torch.amp.GradScaler(device.type) if (dtype == torch.float16 and device.type == "cuda") else None
     return (lambda: torch.autocast(device.type, dtype=dtype)), scaler
 
@@ -154,7 +155,8 @@ def train(cfg: TrainConfig) -> dict:
         from gpuforge.analytics.store import AnalyticsStore
 
         store = AnalyticsStore(cfg.db)
-        run_id = store.start_run("train", {**asdict(cfg), "world_size": world})
+        amp_resolved = str(resolve_amp_dtype(cfg.amp_dtype, device.type)).replace("torch.", "")
+        run_id = store.start_run("train", {**asdict(cfg), "world_size": world, "amp_resolved": amp_resolved})
         Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
 
     step, t_last, imgs, history = 0, time.perf_counter(), 0, []

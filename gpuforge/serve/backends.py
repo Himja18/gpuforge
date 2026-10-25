@@ -50,8 +50,15 @@ class OnnxBackend(Backend):
         import onnxruntime as ort
 
         avail = ort.get_available_providers()
-        providers = [p for p in (["TensorrtExecutionProvider", "CUDAExecutionProvider"] if use_gpu else [])
-                     if p in avail] + ["CPUExecutionProvider"]
+        if use_gpu and "CUDAExecutionProvider" in avail and hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls()  # load the CUDA/cuDNN libs that ship with PyTorch
+            except Exception:  # noqa: BLE001 - best effort; ORT falls back to CPU
+                pass
+        # TensorRT is served by the dedicated TensorRTBackend, so ORT uses its CUDA EP only;
+        # get_providers() below reports what actually loaded (CPU if CUDA failed).
+        providers = (["CUDAExecutionProvider"] if use_gpu and "CUDAExecutionProvider" in avail else []) \
+            + ["CPUExecutionProvider"]
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.sess = ort.InferenceSession(str(onnx_path), opts, providers=providers)

@@ -7,7 +7,7 @@ batch_size: 256
 lr: 0.1
 weight_decay: 0.0005
 label_smoothing: 0.1
-amp_dtype: bf16           # bf16 on Ampere+/Hopper, fp16 on Volta/Turing, none for FP32
+amp_dtype: auto           # auto = bf16 on Ampere+/Hopper, fp16 on Volta/Turing (T4); or bf16 | fp16 | none
 channels_last: true       # NHWC lets cuDNN use tensor-core conv kernels directly
 compile: false            # torch.compile (Triton/Inductor) - try it on Ampere+
 workers: 8
