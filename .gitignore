@@ -1,0 +1,13 @@
+__pycache__/
+*.egg-info/
+build/
+*.so
+runs/
+artifacts/
+reports/
+data/
+logs/
+*.plan
+*.onnx
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,69 @@
+# TensorRT inference service. Requires the NVIDIA device plugin / GPU Operator
+# so that `nvidia.com/gpu` is a schedulable resource.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpuforge-inference
+  labels: {app: gpuforge-inference}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: gpuforge-inference}
+  template:
+    metadata:
+      labels: {app: gpuforge-inference}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      initContainers:
+        # TensorRT engines are GPU-architecture specific: build on the node that serves it
+        - name: build-engine
+          image: ghcr.io/your-org/gpuforge:latest
+          command: ["bash", "-c"]
+          args:
+            - test -f /models/model_fp16.plan || trtexec --onnx=/artifacts/model.onnx
+              --saveEngine=/models/model_fp16.plan --fp16
+              --minShapes=input:1x3x32x32 --optShapes=input:32x3x32x32 --maxShapes=input:64x3x32x32
+          resources:
+            limits: {nvidia.com/gpu: 1}
+          volumeMounts:
+            - {name: artifacts, mountPath: /artifacts, readOnly: true}
+            - {name: models, mountPath: /models}
+      containers:
+        - name: server
+          image: ghcr.io/your-org/gpuforge:latest
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            - {name: GPUFORGE_BACKEND, value: tensorrt}
+            - {name: GPUFORGE_ARTIFACT, value: /models/model_fp16.plan}
+            - {name: GPUFORGE_MAX_BATCH, value: "64"}
+            - {name: GPUFORGE_MAX_WAIT_MS, value: "2"}
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {nvidia.com/gpu: 1, memory: 8Gi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - {name: models, mountPath: /models}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: gpuforge-artifacts}
+        - name: models
+          emptyDir: {}
+      tolerations:
+        - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpuforge-inference
+spec:
+  selector: {app: gpuforge-inference}
+  ports: [{port: 80, targetPort: http, name: http}]

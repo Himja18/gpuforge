@@ -1,0 +1,16 @@
+# Default training configuration (per-GPU batch size; LR scales with world size)
+model: resnet_small
+dataset: synthetic        # or cifar10 (needs torchvision + network)
+n_synthetic: 20000
+epochs: 5
+batch_size: 256
+lr: 0.1
+weight_decay: 0.0005
+label_smoothing: 0.1
+amp_dtype: bf16           # bf16 on Ampere+/Hopper, fp16 on Volta/Turing, none for FP32
+channels_last: true       # NHWC lets cuDNN use tensor-core conv kernels directly
+compile: false            # torch.compile (Triton/Inductor) - try it on Ampere+
+workers: 8
+log_every: 20
+out_dir: runs/latest
+db: reports/analytics.db

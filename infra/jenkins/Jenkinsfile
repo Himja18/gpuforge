@@ -1,0 +1,59 @@
+// CI/CD: CPU tests on every commit, then GPU validation + perf-regression gate on a GPU agent.
+pipeline {
+  agent none
+  options { timestamps(); timeout(time: 90, unit: 'MINUTES') }
+  environment {
+    IMAGE = "ghcr.io/your-org/gpuforge:${env.GIT_COMMIT.take(12)}"
+    ANALYTICS_DB = "/shared/gpuforge/analytics.db"   // persistent across builds = baseline history
+  }
+  stages {
+    stage('Lint & unit tests (CPU)') {
+      agent { docker { image 'python:3.11' } }
+      steps {
+        sh 'pip install -q torch --index-url https://download.pytorch.org/whl/cpu && pip install -q -e ".[dev]"'
+        sh 'ruff check gpuforge tests'
+        sh 'pytest -q --junitxml=reports/junit-cpu.xml'
+      }
+      post { always { junit 'reports/junit-cpu.xml' } }
+    }
+    stage('Build image') {
+      agent { label 'docker' }
+      steps {
+        sh 'docker build -f infra/docker/Dockerfile -t $IMAGE .'
+        sh 'docker push $IMAGE'
+      }
+    }
+    stage('GPU validation & benchmarks') {
+      agent { label 'gpu' }
+      steps {
+        script {
+          def run = { cmd -> sh "docker run --rm --gpus all --ipc=host -v \$PWD/reports:/opt/gpuforge/reports -v /shared/gpuforge:/shared/gpuforge \$IMAGE ${cmd}" }
+          // 1. CUDA kernel tests (no longer skipped on a GPU box)
+          run('pytest -q tests/test_kernels.py --junitxml=reports/junit-gpu.xml')
+          // 2. numerical validation of custom kernels, cuBLAS and cuDNN vs float64
+          run("python -m gpuforge.validation.suite --report reports/validation.json --db ${ANALYTICS_DB}")
+          // 3. short training run + export + inference benchmarks
+          run("python -m gpuforge.train.train --config configs/train.yaml max_steps=200 db=${ANALYTICS_DB}")
+          run('python -m gpuforge.export.export --ckpt runs/latest/checkpoint.pt --out artifacts --trt')
+          run("python -m gpuforge.bench.kernels --db ${ANALYTICS_DB}")
+          // 4. fail the build if any benchmark is >5% slower than the rolling baseline
+          run("python -m gpuforge.analytics.report --db ${ANALYTICS_DB} regress --fail-on-regression")
+        }
+      }
+      post {
+        always {
+          junit allowEmptyResults: true, testResults: 'reports/junit-gpu.xml'
+          archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+        }
+      }
+    }
+    stage('Deploy to staging') {
+      when { branch 'main' }
+      agent { label 'docker' }
+      steps {
+        sh 'kubectl -n staging set image deployment/gpuforge-inference server=$IMAGE build-engine=$IMAGE'
+        sh 'kubectl -n staging rollout status deployment/gpuforge-inference --timeout=10m'
+      }
+    }
+  }
+}

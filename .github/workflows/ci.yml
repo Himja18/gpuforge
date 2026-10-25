@@ -1,0 +1,16 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev]"
+      - run: ruff check gpuforge tests
+      - run: pytest -q
+      - run: python -m gpuforge.validation.suite --device cpu --report reports/validation.json
+      - uses: actions/upload-artifact@v4
+        with: {name: reports, path: reports/}

@@ -1,0 +1,28 @@
+# Single-node multi-GPU DDP training job (NCCL over NVLink/PCIe).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gpuforge-train
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trainer
+          image: ghcr.io/your-org/gpuforge:latest
+          command: ["torchrun", "--standalone", "--nproc_per_node=4",
+                    "-m", "gpuforge.train.train", "--config", "configs/train.yaml",
+                    "out_dir=/artifacts/runs/latest", "db=/artifacts/analytics.db"]
+          env:
+            - {name: NCCL_DEBUG, value: WARN}
+          resources:
+            limits: {nvidia.com/gpu: 4, memory: 64Gi}
+          volumeMounts:
+            - {name: artifacts, mountPath: /artifacts}
+            - {name: dshm, mountPath: /dev/shm}   # DataLoader workers + NCCL need a large /dev/shm
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: gpuforge-artifacts}
+        - name: dshm
+          emptyDir: {medium: Memory, sizeLimit: 16Gi}
