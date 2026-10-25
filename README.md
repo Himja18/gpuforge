@@ -91,8 +91,9 @@ training, and downloads `RESULTS.md` with your measured tables. The notebook is 
 reporting it. *naive* re-reads A and B from global memory K times per output. *smem* stages 32×32 tiles in shared memory,
 cutting global traffic by ~32×. *regtile* has each thread compute a 4×4 output tile from registers, so every shared-memory
 load feeds 4 FMAs instead of 1 — raising arithmetic intensity, which is the same idea cuBLAS/CUTLASS take much further
-(tensor cores, async copies, double buffering). Compiled for sm_80/sm_90, `ptxas -v` reports 57 registers / 4 KB smem
-for *regtile* and **zero spills** for all four kernels.
+(tensor cores, async copies, double buffering). `ptxas -v` reports 64 registers on sm_75 (T4) and 57 on sm_80 (A100)
+with 4 KB smem for *regtile*, and **zero spills** for all four kernels. Remaining gap to cuBLAS (~50 % on the T4):
+no double-buffered/async global loads, no vectorised `float4` loads, and a fixed 64×64 tile for every shape.
 
 **Why error bounds instead of `atol=1e-5`?** For an inner product of length K the rounding error grows with K. A fixed
 tolerance either rejects a correct K=4096 GEMM or accepts a buggy K=16 one. The suite instead checks every element against
@@ -108,34 +109,51 @@ throughput gain. `/metrics` exposes the mean batch size so you can tune the trad
 only if it is >5 % worse than the rolling median *and* outside ~3 robust standard deviations of run-to-run noise, compared
 only against runs on the same device model.
 
-## Verified so far (in a CPU-only sandbox)
+## Results on an NVIDIA Tesla T4 (Google Colab, CUDA 13.0, PyTorch 2.11, TensorRT 11)
 
-* 26 tests pass, 16 CUDA-only tests skip; `ruff` clean.
-* The Colab notebook executes top to bottom (in its CPU test mode).
-* CUDA extension **compiles and links** for sm_80 and sm_90 with CUDA 13 and imports correctly; input guards work.
-* Validation suite: 26/26 CPU checks pass (fp32 BLAS / conv / softmax vs float64).
-* Training (single process and 2-process DDP over Gloo) runs and checkpoints; ONNX export parity
-  max |Δ| ≈ 1e-7 with 100 % top-1 agreement; server, batcher and analytics gate exercised end-to-end.
+**Correctness:** all **42 tests pass** on the GPU (including 16 CUDA-kernel tests), and **all 106 numerical-validation
+checks pass**. That covers the custom kernels, cuBLAS (fp32/fp16) and cuDNN (fp32/fp16) against float64 references.
+The worst case used 15 % of its theoretical error budget.
 
-**Not yet measured:** anything that needs a GPU — kernel correctness on device, TFLOPS vs cuBLAS, TensorRT latency.
-Run the Colab notebook (above) and paste the tables from `RESULTS.md` below.
+### Custom GEMM kernels vs cuBLAS (FP32, median of 5 runs)
 
-## Results (fill in after running on a GPU)
+| Size (M=N=K) | naive | smem | regtile | cuBLAS | regtile % of cuBLAS | regtile vs naive |
+|---|---|---|---|---|---|---|
+| 1024 | 0.38 | 0.74 | **1.92** | 3.48 | 55 % | 5.1× |
+| 2048 | 0.30 | 0.69 | **1.52** | 2.80 | 54 % | 5.0× |
+| 4096 | — | 0.71 | **1.40** | 2.82 | 50 % | — |
 
-| Kernel (FP32, 4096³) | TFLOPS | % of cuBLAS |
-|---|---|---|
-| gpuforge.naive | | |
-| gpuforge.smem | | |
-| gpuforge.regtile | | |
-| cuBLAS (FP32) | | 100 |
-| cuBLAS (TF32) | | |
+TFLOPS. Each optimisation step roughly doubles throughput: shared-memory tiling ≈2× over naive, register tiling a
+further 2.2–2.6×. The T4 (Turing) has no TF32 tensor cores, so cuBLAS "TF32" equals FP32 here. Run-to-run spread was
+6–15 % for the custom kernels but up to 39 % for cuBLAS at 1024 on the shared Colab GPU, which is why the table uses
+medians over repeated runs (a single run overstated regtile at 80 % of cuBLAS).
 
-| Backend | batch 1 p50 (ms) | batch 64 img/s |
-|---|---|---|
-| PyTorch FP32 | | |
-| PyTorch FP16 | | |
-| ONNX Runtime (CUDA EP) | | |
-| TensorRT FP16 | | |
+### Inference: ResNet backbone, 3×32×32 inputs, end-to-end including host↔device copies
+
+| Backend | batch 1 p50 | batch 128 p50 | batch 128 throughput |
+|---|---|---|---|
+| PyTorch FP32 | 2.06 ms | 34.9 ms | 3,663 img/s |
+| PyTorch FP16 | 2.08 ms | 4.13 ms | 31,028 img/s |
+| ONNX Runtime (CUDA EP) | 0.62 ms | 26.4 ms | 4,847 img/s |
+| **TensorRT FP16** | **0.55 ms** | **1.38 ms** | **93,004 img/s** |
+
+TensorRT FP16 is **25× the throughput of PyTorch FP32** and 3× PyTorch FP16 at batch 128, with **3.7× lower batch-1
+latency**. ONNX → TensorRT parity: max |Δ| 5.4e-7, 100 % top-1 agreement.
+
+### Training
+
+Mixed-precision (FP16 autocast + GradScaler, channels_last) ResNet training at **7,784 images/s** on one T4, loss
+2.11 → 0.54 over 390 steps. (Accuracy on the synthetic dataset reaches 100 %; the dataset is a pipeline test, not a
+benchmark.)
+
+### Bugs found by running on real hardware
+
+1. **`--use_fast_math` broke GELU accuracy.** On sm_75 it lowers `tanhf` to the `tanh.approx.f32` hardware instruction
+   (34 of them in the PTX, ~2⁻¹¹ relative error). The validation suite flagged ~1 % error in the fused GEMM+GELU epilogue.
+   Fix: build without fast-math, keep the explicit `__expf` intrinsic in softmax, and give GELU a documented
+   evaluation-error budget (with a test that this budget still rejects the hardware approximation).
+2. **TensorRT 11 is strongly typed only.** It removed the `BuilderFlag.FP16` precision switch. The exporter now converts
+   the ONNX graph to fp16 (keeping fp32 I/O) and builds a strongly typed network. TensorRT 10 keeps the flag path.
 
 ## Layout
 
