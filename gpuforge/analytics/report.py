@@ -83,18 +83,24 @@ def results_markdown(store: AnalyticsStore) -> str:
 
     tr = store.latest_run("train")
     if tr:
-        cfg = json.loads(store.query("SELECT config FROM runs WHERE id=?", (tr,))[0]["config"])
+        row = store.query("SELECT config, device FROM runs WHERE id=?", (tr,))[0]
+        cfg = json.loads(row["config"])
         loss = store.metric_series(tr, "train/loss")
-        tput = [v for _, v in store.metric_series(tr, "train/images_per_sec")[1:]]
+        all_tput = [v for _, v in store.metric_series(tr, "train/images_per_sec")]
+        tput = all_tput[1:] or all_tput  # skip the warm-up window when there is more than one
         acc = store.metric_series(tr, "val/accuracy")
         amp = cfg.get("amp_resolved", cfg.get("amp_dtype"))
-        out += [f"## Training (run #{tr})", "",
-                f"- model `{cfg.get('model')}`, AMP `{amp}`, batch {cfg.get('batch_size')} "
-                f"x {cfg.get('world_size', 1)} GPU(s), channels_last={cfg.get('channels_last')}"]
-        if loss:
+        world = cfg.get("world_size", 1)
+        where = f"{world} x {row['device']}" if row["device"] != "cpu" else "CPU"
+        out += [f"## Training (run #{tr}, {where})", "",
+                f"- model `{cfg.get('model')}`, AMP `{amp}`, batch {cfg.get('batch_size')} per device, "
+                f"channels_last={cfg.get('channels_last')}"]
+        if len(loss) > 1:
             out.append(f"- loss {loss[0][1]:.3f} -> {loss[-1][1]:.3f} over {loss[-1][0]} steps")
+        elif loss:
+            out.append(f"- final loss {loss[-1][1]:.3f} after {loss[-1][0]} steps")
         if tput:
-            out.append(f"- mean throughput {sum(tput) / len(tput):,.0f} images/s (first logging window excluded)")
+            out.append(f"- mean throughput {sum(tput) / len(tput):,.0f} images/s")
         if acc:
             out.append(f"- final validation accuracy {acc[-1][1]:.3f}")
         out.append("")
